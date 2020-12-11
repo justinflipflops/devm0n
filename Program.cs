@@ -4,6 +4,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Serilog;
 
 namespace devm0n
 {
@@ -11,7 +12,11 @@ namespace devm0n
     {
         public static void Main(string[] args)
         {
-            CreateHostBuilder(args).Build().Run();
+            Log.Logger = new LoggerConfiguration().Enrich.FromLogContext()
+            .WriteTo.File($"./logs/", rollingInterval: RollingInterval.Day)
+            .WriteTo.Console()
+            .CreateLogger();
+            CreateHostBuilder(args).UseSerilog().Build().Run();
         }
 
         public static IHostBuilder CreateHostBuilder(string[] args) =>

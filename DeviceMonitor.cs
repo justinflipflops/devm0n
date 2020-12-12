@@ -74,7 +74,7 @@ namespace devm0n
                             Log.Debug($"Worker[{_Device.Address}:{_Device.Port}] state not changed.");
                         else
                         {
-                            Log.Debug($"Worker[{_Device.Address}:{_Device.Port}] state changed.");
+                            Log.Information($"Worker[{_Device.Address}:{_Device.Port}] state changed.");
                             if (_Device.NotificationMethod.Enabled)
                             {
                                 if (_Device.NotificationMethod.Type == NotificationType.EMAIL) // sendgrid

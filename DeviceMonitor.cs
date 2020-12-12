@@ -29,6 +29,9 @@ namespace devm0n
         private readonly TwilioRestClient _TwilioClient;
         private readonly XmlSerializer _XmlSerializer = new System.Xml.Serialization.XmlSerializer(typeof(DeviceState));
         private DeviceState last_DeviceState = null;
+        private UInt64 poll_totalCount = 0;
+        private UInt64 poll_changeCount = 0;
+        private UInt64 poll_nochangeCount = 0;
         public DeviceMonitor(GlobalConfiguration Global, DeviceConfiguration Device)
         {
             if (Global == null || Device == null)
@@ -41,7 +44,6 @@ namespace devm0n
             _SendGridClient = new SendGridClient(_Global.SendGrid.ApiKey);
             _TwilioClient = new TwilioRestClient(_Global.Twilio.AccountSid,_Global.Twilio.AuthToken);
         }
-
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             while (!stoppingToken.IsCancellationRequested)
@@ -66,15 +68,20 @@ namespace devm0n
                         _httpResponse.Dispose();
                     }
                     Log.Information($"Worker[{_Device.Address}:{_Device.Port}] polled.");
+                    poll_totalCount++;
                     if (current_DeviceState is object)
                     {
                         if (last_DeviceState is null) { last_DeviceState = current_DeviceState; }
                         // intensive and slow processing of books list. We don't want this to delay releasing the connection.
                         if (last_DeviceState == current_DeviceState)
+                        {
                             Log.Debug($"Worker[{_Device.Address}:{_Device.Port}] state not changed.");
+                            poll_nochangeCount++;
+                        }
                         else
                         {
                             Log.Information($"Worker[{_Device.Address}:{_Device.Port}] state changed.");
+                            poll_changeCount++;
                             if (_Device.NotificationMethod.Enabled)
                             {
                                 if (_Device.NotificationMethod.Type == NotificationType.EMAIL) // sendgrid
@@ -131,6 +138,7 @@ namespace devm0n
                 Log.Debug($"Worker[{_Device.Address}:{_Device.Port}] sleeping for {_jitter}");
                 await Task.Delay(_jitter, stoppingToken);
             }
+            Log.Information($"Worker[{_Device.Address}:{_Device.Port}] poll statistics. total: {poll_totalCount} - no change: {poll_nochangeCount} - change: {poll_changeCount}");
         }
 
         private async Task<string> DeviceStateToXML(DeviceConfiguration _Device, DeviceState _this)

@@ -31,7 +31,7 @@ namespace devm0n
             }
             settings_configuration_full_path = $"{settings_configuration_directory}{settings_configuration_name}";
             LoggerConfiguration _LoggerConfiguration = new LoggerConfiguration().Enrich.FromLogContext()
-                .WriteTo.File($"./logs/", rollingInterval: RollingInterval.Day)
+                .WriteTo.File($"{settings_configuration_directory}logs/.log", fileSizeLimitBytes: null, rollingInterval: RollingInterval.Day)
                 .WriteTo.Console();
             
             if (System.Diagnostics.Debugger.IsAttached)
@@ -77,7 +77,7 @@ namespace devm0n
                     break;
                 case OperatingSystemType.macOS:
                 default:
-                    _result = _builder;
+                    _result = _builder.UseConsoleLifetime();
                     break;
             }
             return _result;

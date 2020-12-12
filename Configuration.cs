@@ -32,6 +32,13 @@ namespace devm0n
         }
         public string BuildDefault()
         {
+            Global.Smtp.Address = $"smtp.server.com";
+            Global.Smtp.Port = 25;
+            Global.Smtp.UseAuth = false;
+            Global.Smtp.UseSSL = false;
+            Global.Smtp.EmailAddress = "from@address.com";
+            Global.Smtp.Credential.Username = "username@maybe.com";
+            Global.Smtp.Credential.Password = "password";
             Global.SendGrid.ApiKey = $"SENDGRID_API_KEY";
             Global.SendGrid.EmailAddress = $"from@address.com";
             Global.Twilio.AccountSid = $"TWILIO_ACCOUNT_SID";
@@ -45,7 +52,7 @@ namespace devm0n
                     PollInterval = new PollInterval(),
                     NotificationMethod = new NotificationMethodConfiguration() {
                         Enabled = true,
-                        Type = NotificationType.EMAIL,
+                        Type = NotificationType.SENDGRID,
                         Address = $"to@address.com"
                     }
                 },
@@ -56,7 +63,7 @@ namespace devm0n
                     PollInterval = new PollInterval(),
                     NotificationMethod = new NotificationMethodConfiguration() {
                         Enabled = false,
-                        Type = NotificationType.SMS,
+                        Type = NotificationType.TWILIO,
                         Address = $"+15615551212"
                     }
                 }
@@ -67,10 +74,12 @@ namespace devm0n
     }
     public class GlobalConfiguration
     {
+        public SmtpConfiguration Smtp {get; set;}
         public SendGridConfiguration SendGrid { get; set; }
         public TwilioConfiguration Twilio { get; set; }
         public GlobalConfiguration()
         {
+            Smtp = new SmtpConfiguration();
             SendGrid = new SendGridConfiguration();
             Twilio = new TwilioConfiguration();
         }
@@ -101,6 +110,32 @@ namespace devm0n
             return _builder.ToString();
         }
 
+    }
+
+    public class SmtpConfiguration
+    {
+        public string Address {get; set;}
+        public int Port {get; set;}
+        public bool UseAuth {get; set;}
+        public bool UseSSL {get; set;} 
+        public string EmailAddress {get; set;}
+        public SmtpCredentialConfiguration Credential {get; set;}
+        public SmtpConfiguration()
+        {
+            Address = string.Empty;
+            EmailAddress = string.Empty;
+            Credential = new SmtpCredentialConfiguration();
+        }
+    }
+    public class SmtpCredentialConfiguration
+    {
+        public string Username {get;set;}
+        public string Password {get;set;}
+        public SmtpCredentialConfiguration()
+        {
+            Username = string.Empty;
+            Password = string.Empty;
+        }
     }
     public class SendGridConfiguration
     {
@@ -135,8 +170,9 @@ namespace devm0n
     }
     public enum NotificationType
     {
-        EMAIL,
-        SMS
+        SENDGRID,
+        TWILIO,
+        SMTP
     }
     public class TimeSpanConverter : JsonConverter<TimeSpan>
     {

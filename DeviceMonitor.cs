@@ -16,6 +16,9 @@ using Twilio;
 using Twilio.Types;
 using Twilio.Clients;
 using Twilio.Rest.Api.V2010.Account;
+using System.Net.Mail;
+using System.Net;
+using System.Net.Mime;
 
 namespace devm0n
 {
@@ -27,6 +30,7 @@ namespace devm0n
         private readonly HttpClientHandler _HttpClientHandler;
         private readonly SendGridClient _SendGridClient;
         private readonly TwilioRestClient _TwilioClient;
+        private readonly SmtpClient _SmtpClient;
         private readonly XmlSerializer _XmlSerializer = new System.Xml.Serialization.XmlSerializer(typeof(DeviceState));
         private DeviceState last_DeviceState = null;
         private UInt64 poll_totalCount = 0;
@@ -43,6 +47,12 @@ namespace devm0n
             _HttpClient = new HttpClient(_HttpClientHandler);
             _SendGridClient = new SendGridClient(_Global.SendGrid.ApiKey);
             _TwilioClient = new TwilioRestClient(_Global.Twilio.AccountSid,_Global.Twilio.AuthToken);
+            _SmtpClient = new SmtpClient(_Global.Smtp.Address,_Global.Smtp.Port);
+            _SmtpClient.UseDefaultCredentials = false;
+            _SmtpClient.DeliveryMethod = System.Net.Mail.SmtpDeliveryMethod.Network;
+            _SmtpClient.EnableSsl = _Global.Smtp.UseSSL;
+            if (_Global.Smtp.UseAuth)
+                _SmtpClient.Credentials = new NetworkCredential(_Global.Smtp.Credential.Username,_Global.Smtp.Credential.Password);
         }
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
@@ -84,7 +94,7 @@ namespace devm0n
                             poll_changeCount++;
                             if (_Device.NotificationMethod.Enabled)
                             {
-                                if (_Device.NotificationMethod.Type == NotificationType.EMAIL) // sendgrid
+                                if (_Device.NotificationMethod.Type == NotificationType.SENDGRID) // sendgrid
                                 {
                                     Log.Debug($"Worker[{_Device.Address}:{_Device.Port}] sending notification via SendGrid");
                                     EmailAddress _from = new EmailAddress(_Global.SendGrid.EmailAddress);
@@ -105,7 +115,7 @@ namespace devm0n
                                         Log.Error(_SendGridException, $"Worker[{_Device.Address}:{_Device.Port}] failed to send notification via SendGrid");
                                     }
                                 }
-                                else if (_Device.NotificationMethod.Type == NotificationType.SMS) // twilio
+                                else if (_Device.NotificationMethod.Type == NotificationType.TWILIO) // twilio
                                 {
                                     Log.Debug($"Worker[{_Device.Address}:{_Device.Port}] sending notification via Twilio");
                                     PhoneNumber _from = new PhoneNumber(_Global.Twilio.PhoneNumber);
@@ -122,6 +132,32 @@ namespace devm0n
                                     catch(Exception _TwilioException)
                                     {
                                         Log.Error(_TwilioException, $"Worker[{_Device.Address}:{_Device.Port}] failed to send notification via Twilio");
+                                    }
+                                }
+                                else if (_Device.NotificationMethod.Type == NotificationType.SMTP) //smtp
+                                {
+                                    Log.Debug($"Worker[{_Device.Address}:{_Device.Port}] sending notification via Smtp");
+                                    MailAddress _from = new MailAddress(_Global.Smtp.EmailAddress);
+                                    MailAddress _to = new MailAddress(_Device.NotificationMethod.Address);
+                                    string _subject = $"Device {_Device.Address}:{_Device.Port} state changed.";
+                                    string _plaintextContent= await DeviceStateToXML(_Device,current_DeviceState);
+                                    string _htmlContent = await DeviceStateToHTML(_Device,current_DeviceState);
+                                    try {
+
+                                        MailMessage _smtpMessage = new MailMessage(_from,_to);
+                                        _smtpMessage.BodyEncoding = Encoding.UTF8;
+                                        _smtpMessage.SubjectEncoding = Encoding.UTF8;
+                                        _smtpMessage.Subject = _subject;
+                                        _smtpMessage.Body = _plaintextContent;
+                                        AlternateView _htmlView = AlternateView.CreateAlternateViewFromString(_htmlContent,Encoding.UTF8, MediaTypeNames.Text.Html);
+                                        _htmlView.ContentType = new System.Net.Mime.ContentType(MediaTypeNames.Text.Html);
+                                        _smtpMessage.AlternateViews.Add(_htmlView);
+                                        await _SmtpClient.SendMailAsync(_smtpMessage,stoppingToken);
+                                        Log.Information($"Worker[{_Device.Address}:{_Device.Port}] sent notification via Smtp");
+                                    }
+                                    catch(Exception _SmtpException)
+                                    {
+                                        Log.Error(_SmtpException, $"Worker[{_Device.Address}:{_Device.Port}] failed to send notification via Smtp");
                                     }
                                 }
                             }

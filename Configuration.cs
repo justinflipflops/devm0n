@@ -66,7 +66,18 @@ namespace devm0n
                         Type = NotificationType.TWILIO,
                         Address = $"+15615551212"
                     }
-                }
+                },
+                new DeviceConfiguration() { 
+                    Address = $"2.2.2.2",
+                    Port = 80,
+                    UseSSL = false,
+                    PollInterval = new PollInterval(),
+                    NotificationMethod = new NotificationMethodConfiguration() {
+                        Enabled = true,
+                        Type = NotificationType.SMTP,
+                        Address = $"to@address.com"
+                    }
+                },
             };
             try { return JsonSerializer.Serialize(this, new JsonSerializerOptions() { WriteIndented = true, Converters = { new TimeSpanConverter() } }); }
             catch { return null; }

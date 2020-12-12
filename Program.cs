@@ -61,7 +61,7 @@ namespace devm0n
                 foreach (DeviceConfiguration _device in _Configuration.Devices)
                 {
                     services.AddSingleton<IHostedService>(sp => new DeviceMonitor(_Configuration.Global, _device));
-                    Log.Debug($"Added device monitor for {_device.Address}.");
+                    Log.Debug($"Added device monitor for {_device.Name}.");
                 }
             });
             Log.Debug($"Device monitors added.");

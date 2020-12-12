@@ -53,12 +53,13 @@ namespace devm0n
             _SmtpClient.EnableSsl = _Global.Smtp.UseSSL;
             if (_Global.Smtp.UseAuth)
                 _SmtpClient.Credentials = new NetworkCredential(_Global.Smtp.Credential.Username,_Global.Smtp.Credential.Password);
+            System.Net.ServicePointManager.ServerCertificateValidationCallback = (message, cert, chain, errors) => true;
         }
         protected override async Task ExecuteAsync(CancellationToken stoppingToken)
         {
             while (!stoppingToken.IsCancellationRequested)
             {
-                Log.Information($"Worker[{_Device.Address}:{_Device.Port}] polling.");
+                Log.Information($"Monitor[{_Device.Name}] polling.");
                 try 
                 {
                     string _HttpRequestUrl = _Device.GetRequestUrl();
@@ -77,7 +78,7 @@ namespace devm0n
                     {
                         _httpResponse.Dispose();
                     }
-                    Log.Information($"Worker[{_Device.Address}:{_Device.Port}] polled.");
+                    Log.Information($"Monitor[{_Device.Name}] polled.");
                     poll_totalCount++;
                     if (current_DeviceState is object)
                     {
@@ -85,39 +86,39 @@ namespace devm0n
                         // intensive and slow processing of books list. We don't want this to delay releasing the connection.
                         if (last_DeviceState == current_DeviceState)
                         {
-                            Log.Debug($"Worker[{_Device.Address}:{_Device.Port}] state not changed.");
+                            Log.Debug($"Monitor[{_Device.Name}] state not changed.");
                             poll_nochangeCount++;
                         }
                         else
                         {
-                            Log.Information($"Worker[{_Device.Address}:{_Device.Port}] state changed.");
+                            Log.Information($"Monitor[{_Device.Name}] state changed.");
                             poll_changeCount++;
                             if (_Device.NotificationMethod.Enabled)
                             {
                                 if (_Device.NotificationMethod.Type == NotificationType.SENDGRID) // sendgrid
                                 {
-                                    Log.Debug($"Worker[{_Device.Address}:{_Device.Port}] sending notification via SendGrid");
+                                    Log.Debug($"Monitor[{_Device.Name}] sending notification via SendGrid");
                                     EmailAddress _from = new EmailAddress(_Global.SendGrid.EmailAddress);
                                     EmailAddress _to = new EmailAddress(_Device.NotificationMethod.Address);
-                                    string _subject = $"Device {_Device.Address}:{_Device.Port} state changed.";
+                                    string _subject = $"Device {_Device.Name} state changed.";
                                     string _plaintextContent= await DeviceStateToXML(_Device,current_DeviceState);
                                     string _htmlContent = await DeviceStateToHTML(_Device,current_DeviceState);
                                     try {
                                         SendGridMessage _sgMessage = MailHelper.CreateSingleEmail(_from, _to, _subject, _plaintextContent, _htmlContent);
                                         Response _sgResponse = await _SendGridClient.SendEmailAsync(_sgMessage);
                                         if (_sgResponse.StatusCode == System.Net.HttpStatusCode.Accepted)
-                                            Log.Information($"Worker[{_Device.Address}:{_Device.Port}] sent notification via SendGrid");
+                                            Log.Information($"Monitor[{_Device.Name}] sent notification via SendGrid");
                                         else
                                             throw new HttpRequestException($"{_sgResponse.StatusCode}");
                                     }
                                     catch(Exception _SendGridException)
                                     {
-                                        Log.Error(_SendGridException, $"Worker[{_Device.Address}:{_Device.Port}] failed to send notification via SendGrid");
+                                        Log.Error(_SendGridException, $"Monitor[{_Device.Name}] failed to send notification via SendGrid");
                                     }
                                 }
                                 else if (_Device.NotificationMethod.Type == NotificationType.TWILIO) // twilio
                                 {
-                                    Log.Debug($"Worker[{_Device.Address}:{_Device.Port}] sending notification via Twilio");
+                                    Log.Debug($"Monitor[{_Device.Name}] sending notification via Twilio");
                                     PhoneNumber _from = new PhoneNumber(_Global.Twilio.PhoneNumber);
                                     PhoneNumber _to = new PhoneNumber(_Device.NotificationMethod.Address);
                                     string _smsContent = "State Changed\r\n";
@@ -125,21 +126,21 @@ namespace devm0n
                                     try {
                                         MessageResource _twMessage = await MessageResource.CreateAsync(to: _to, from: _from, body: _smsContent, client: _TwilioClient);
                                         if (_twMessage.Status == MessageResource.StatusEnum.Queued)
-                                            Log.Information($"Worker[{_Device.Address}:{_Device.Port}] sent notification via Twilio");
+                                            Log.Information($"Monitor[{_Device.Name}] sent notification via Twilio");
                                         else
                                             throw new HttpRequestException($"{_twMessage.Status}");
                                     }
                                     catch(Exception _TwilioException)
                                     {
-                                        Log.Error(_TwilioException, $"Worker[{_Device.Address}:{_Device.Port}] failed to send notification via Twilio");
+                                        Log.Error(_TwilioException, $"Monitor[{_Device.Name}] failed to send notification via Twilio");
                                     }
                                 }
                                 else if (_Device.NotificationMethod.Type == NotificationType.SMTP) //smtp
                                 {
-                                    Log.Debug($"Worker[{_Device.Address}:{_Device.Port}] sending notification via Smtp");
+                                    Log.Debug($"Monitor[{_Device.Name}] sending notification via Smtp");
                                     MailAddress _from = new MailAddress(_Global.Smtp.EmailAddress);
                                     MailAddress _to = new MailAddress(_Device.NotificationMethod.Address);
-                                    string _subject = $"Device {_Device.Address}:{_Device.Port} state changed.";
+                                    string _subject = $"Device {_Device.Name} state changed.";
                                     string _plaintextContent= await DeviceStateToXML(_Device,current_DeviceState);
                                     string _htmlContent = await DeviceStateToHTML(_Device,current_DeviceState);
                                     try {
@@ -153,28 +154,28 @@ namespace devm0n
                                         _htmlView.ContentType = new System.Net.Mime.ContentType(MediaTypeNames.Text.Html);
                                         _smtpMessage.AlternateViews.Add(_htmlView);
                                         await _SmtpClient.SendMailAsync(_smtpMessage,stoppingToken);
-                                        Log.Information($"Worker[{_Device.Address}:{_Device.Port}] sent notification via Smtp");
+                                        Log.Information($"Monitor[{_Device.Name}] sent notification via Smtp");
                                     }
                                     catch(Exception _SmtpException)
                                     {
-                                        Log.Error(_SmtpException, $"Worker[{_Device.Address}:{_Device.Port}] failed to send notification via Smtp");
+                                        Log.Error(_SmtpException, $"Monitor[{_Device.Name}] failed to send notification via Smtp");
                                     }
                                 }
                             }
                             last_DeviceState = current_DeviceState; // save current state
-                            Log.Debug($"Worker[{_Device.Address}:{_Device.Port}] internal state updated.");
+                            Log.Debug($"Monitor[{_Device.Name}] internal state updated.");
                         }
                     }
                 }
                 catch(Exception _Exception)
                 {
-                    Log.Error(_Exception,$"Worker[{_Device.Address}:{_Device.Port}] polling error.");
+                    Log.Error(_Exception,$"Monitor[{_Device.Name}] polling error.");
                 }
                 TimeSpan _jitter = _Device.PollInterval.Next();
-                Log.Debug($"Worker[{_Device.Address}:{_Device.Port}] sleeping for {_jitter}");
+                Log.Debug($"Monitor[{_Device.Name}] sleeping for {_jitter}");
                 await Task.Delay(_jitter, stoppingToken);
             }
-            Log.Information($"Worker[{_Device.Address}:{_Device.Port}] poll statistics. total: {poll_totalCount} - no change: {poll_nochangeCount} - change: {poll_changeCount}");
+            Log.Information($"Monitor[{_Device.Name}] poll statistics. total: {poll_totalCount} - no change: {poll_nochangeCount} - change: {poll_changeCount}");
         }
 
         private async Task<string> DeviceStateToXML(DeviceConfiguration _Device, DeviceState _this)
@@ -199,8 +200,8 @@ namespace devm0n
         private async Task<string> DeviceStateToSMS(DeviceConfiguration _Device, DeviceState _this)
         {
             StringBuilder _builder = new StringBuilder();
-            _builder.AppendLine($"{_Device.Address}:{_Device.Port}\r");
-            _builder.AppendLine(new String('-',_Device.Address.Length)+"\r");
+            _builder.AppendLine($"{_Device.Name}\r");
+            _builder.AppendLine(new String('-',_Device.Name.Length)+"\r");
             _builder.AppendLine($"Input State 0: {_this.InputState0}\r");
             _builder.AppendLine($"Input State 1: {_this.InputState1}\r");
             _builder.AppendLine($"Input State 2: {_this.InputState2}\r");
@@ -242,7 +243,7 @@ namespace devm0n
             _builder.Append("<o:idmap v:ext=\"edit\" data=\"1\" />\r\n</o:shapelayout></xml><![endif]-->\r\n</head>\r\n<body lang=\"EN-US\" link=\"#0563C1\" vlink=\"#954F72\">\r\n<div class=\"WordSection1\">\r\n<div align=\"center\">\r\n");
             _builder.Append("<table class=\"MsoNormalTable\" border=\"1\" cellpadding=\"0\" style=\"background:#3B5FA6\">\r\n<tbody>\r\n<tr>\r\n<td colspan=\"2\" style=\"background:#7799EE;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
             _builder.Append("<p class=\"MsoNormal\" align=\"center\" style=\"mso-margin-top-alt:auto;mso-margin-bottom-alt:auto;text-align:center\">\r\n");
-            _builder.Append($"<b><span style=\"font-size:24.0pt;font-family:&quot;Verdana&quot;,sans-serif;color:black\">{_Device.Address}:{_Device.Port}<o:p></o:p></span></b></p>\r\n");
+            _builder.Append($"<b><span style=\"font-size:24.0pt;font-family:&quot;Verdana&quot;,sans-serif;color:black\">{_Device.Name}<o:p></o:p></span></b></p>\r\n");
             _builder.Append("</td>\r\n</tr>\r\n<tr>\r\n<td style=\"padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
             _builder.Append("<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">Input State 0<o:p></o:p></span></b></p>\r\n");
             _builder.Append("</td>\r\n<td style=\"background:gray;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");

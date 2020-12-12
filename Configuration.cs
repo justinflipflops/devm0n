@@ -46,6 +46,7 @@ namespace devm0n
             Global.Twilio.PhoneNumber = $"+15615550100";
             Devices = new DeviceConfiguration[] { 
                 new DeviceConfiguration() { 
+                    Name = "SendGrid Example",
                     Address = $"0.0.0.0",
                     Port = 80,
                     UseSSL = false,
@@ -57,6 +58,7 @@ namespace devm0n
                     }
                 },
                 new DeviceConfiguration() { 
+                    Name = "Twilio Example",
                     Address = $"1.1.1.1",
                     Port = 443,
                     UseSSL = true,
@@ -68,6 +70,7 @@ namespace devm0n
                     }
                 },
                 new DeviceConfiguration() { 
+                    Name = "Smtp Example",
                     Address = $"2.2.2.2",
                     Port = 80,
                     UseSSL = false,
@@ -97,6 +100,7 @@ namespace devm0n
     }
     public class DeviceConfiguration
     {
+        public string Name {get; set;}
         public string Address { get; set; }
         public int Port {get; set;}
         public bool UseSSL {get;set;}
@@ -104,6 +108,7 @@ namespace devm0n
         public NotificationMethodConfiguration NotificationMethod { get; set; }
         public DeviceConfiguration() 
         {
+            Name = string.Empty;
             Address = string.Empty;
             PollInterval = new PollInterval();
             NotificationMethod = new NotificationMethodConfiguration();

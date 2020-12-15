@@ -19,6 +19,7 @@ using Twilio.Rest.Api.V2010.Account;
 using System.Net.Mail;
 using System.Net;
 using System.Net.Mime;
+using System.Xml;
 
 namespace devm0n
 {
@@ -26,22 +27,25 @@ namespace devm0n
     {
         private readonly GlobalConfiguration _Global;
         private readonly DeviceConfiguration _Device;
+        private readonly Dictionary<string,GroupConfiguration> _Groups;
         private readonly HttpClient _HttpClient;
         private readonly HttpClientHandler _HttpClientHandler;
         private readonly SendGridClient _SendGridClient;
         private readonly TwilioRestClient _TwilioClient;
         private readonly SmtpClient _SmtpClient;
         private readonly XmlSerializer _XmlSerializer = new System.Xml.Serialization.XmlSerializer(typeof(DeviceState));
-        private DeviceState last_DeviceState = null;
+        private Dictionary<string,string> last_DeviceStateDict = null;
         private UInt64 poll_totalCount = 0;
         private UInt64 poll_changeCount = 0;
         private UInt64 poll_nochangeCount = 0;
-        public DeviceMonitor(GlobalConfiguration Global, DeviceConfiguration Device)
+        private CancellationToken _stoppingToken;
+        public DeviceMonitor(GlobalConfiguration Global, DeviceConfiguration Device, Dictionary<string,GroupConfiguration> Groups)
         {
             if (Global == null || Device == null)
                 throw new ArgumentNullException("DeviceMonitor Constructor");
             _Global = Global;
             _Device = Device;
+            _Groups = Groups;
             _HttpClientHandler = new HttpClientHandler();
             _HttpClientHandler.ServerCertificateCustomValidationCallback = (message, cert, chain, errors) => true;
             _HttpClient = new HttpClient(_HttpClientHandler);
@@ -55,116 +59,55 @@ namespace devm0n
                 _SmtpClient.Credentials = new NetworkCredential(_Global.Smtp.Credential.Username,_Global.Smtp.Credential.Password);
             System.Net.ServicePointManager.ServerCertificateValidationCallback = (message, cert, chain, errors) => true;
         }
-        protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+        protected override async Task ExecuteAsync(CancellationToken StoppingToken)
         {
-            while (!stoppingToken.IsCancellationRequested)
+            _stoppingToken = StoppingToken;
+            while (!_stoppingToken.IsCancellationRequested)
             {
-                Log.Information($"Monitor[{_Device.Name}] polling.");
+                Log.Debug($"Monitor[{_Device.Name}] polling.");
                 try 
                 {
                     string _HttpRequestUrl = _Device.GetRequestUrl();
                     HttpResponseMessage _httpResponse = await _HttpClient.GetAsync(_HttpRequestUrl, HttpCompletionOption.ResponseHeadersRead);
                     _httpResponse.EnsureSuccessStatusCode();
-                    DeviceState current_DeviceState = null;
+                    Dictionary<string,string> current_DeviceStateDict = new Dictionary<string, string>();
                     try
                     {
                         if (_httpResponse.Content is object)
                         {
-                            Stream _httpResponseStream = await _httpResponse.Content.ReadAsStreamAsync();
-                            current_DeviceState = (DeviceState)_XmlSerializer.Deserialize(_httpResponseStream);
+                            string _XmlDocumentData = string.Empty;
+                            using (Stream _httpResponseStream = await _httpResponse.Content.ReadAsStreamAsync())
+                                using (StreamReader _httpResponseStreamReader = new StreamReader(_httpResponseStream))
+                                    _XmlDocumentData = await _httpResponseStreamReader.ReadToEndAsync();
+                            current_DeviceStateDict = await XmlToDictionary(_XmlDocumentData);
                         }
                     }
                     finally
                     {
                         _httpResponse.Dispose();
                     }
-                    Log.Information($"Monitor[{_Device.Name}] polled.");
                     poll_totalCount++;
-                    if (current_DeviceState is object)
+                    if (current_DeviceStateDict.Count > 0)
                     {
-                        if (last_DeviceState is null) { last_DeviceState = current_DeviceState; }
+                        if (last_DeviceStateDict is null) { last_DeviceStateDict = current_DeviceStateDict; }
                         // intensive and slow processing of books list. We don't want this to delay releasing the connection.
-                        if (last_DeviceState == current_DeviceState)
+                        Dictionary<string,string> compare_DeviceStateDict = await DictionaryDiff(last_DeviceStateDict,current_DeviceStateDict);
+                        if (compare_DeviceStateDict.Count == 0)
                         {
                             Log.Debug($"Monitor[{_Device.Name}] state not changed.");
                             poll_nochangeCount++;
                         }
                         else
                         {
-                            Log.Information($"Monitor[{_Device.Name}] state changed.");
+                            Log.Debug($"Monitor[{_Device.Name}] state changed.");
                             poll_changeCount++;
-                            if (_Device.NotificationMethod.Enabled)
-                            {
-                                if (_Device.NotificationMethod.Type == NotificationType.SENDGRID) // sendgrid
-                                {
-                                    Log.Debug($"Monitor[{_Device.Name}] sending notification via SendGrid");
-                                    EmailAddress _from = new EmailAddress(_Global.SendGrid.EmailAddress);
-                                    EmailAddress _to = new EmailAddress(_Device.NotificationMethod.Address);
-                                    string _subject = $"Device {_Device.Name} state changed.";
-                                    string _plaintextContent= await DeviceStateToXML(_Device,current_DeviceState);
-                                    string _htmlContent = await DeviceStateToHTML(_Device,current_DeviceState);
-                                    try {
-                                        SendGridMessage _sgMessage = MailHelper.CreateSingleEmail(_from, _to, _subject, _plaintextContent, _htmlContent);
-                                        Response _sgResponse = await _SendGridClient.SendEmailAsync(_sgMessage);
-                                        if (_sgResponse.StatusCode == System.Net.HttpStatusCode.Accepted)
-                                            Log.Information($"Monitor[{_Device.Name}] sent notification via SendGrid");
-                                        else
-                                            throw new HttpRequestException($"{_sgResponse.StatusCode}");
-                                    }
-                                    catch(Exception _SendGridException)
-                                    {
-                                        Log.Error(_SendGridException, $"Monitor[{_Device.Name}] failed to send notification via SendGrid");
-                                    }
-                                }
-                                else if (_Device.NotificationMethod.Type == NotificationType.TWILIO) // twilio
-                                {
-                                    Log.Debug($"Monitor[{_Device.Name}] sending notification via Twilio");
-                                    PhoneNumber _from = new PhoneNumber(_Global.Twilio.PhoneNumber);
-                                    PhoneNumber _to = new PhoneNumber(_Device.NotificationMethod.Address);
-                                    string _smsContent = "State Changed\r\n";
-                                    _smsContent = _smsContent + await DeviceStateToSMS(_Device,current_DeviceState);
-                                    try {
-                                        MessageResource _twMessage = await MessageResource.CreateAsync(to: _to, from: _from, body: _smsContent, client: _TwilioClient);
-                                        if (_twMessage.Status == MessageResource.StatusEnum.Queued)
-                                            Log.Information($"Monitor[{_Device.Name}] sent notification via Twilio");
-                                        else
-                                            throw new HttpRequestException($"{_twMessage.Status}");
-                                    }
-                                    catch(Exception _TwilioException)
-                                    {
-                                        Log.Error(_TwilioException, $"Monitor[{_Device.Name}] failed to send notification via Twilio");
-                                    }
-                                }
-                                else if (_Device.NotificationMethod.Type == NotificationType.SMTP) //smtp
-                                {
-                                    Log.Debug($"Monitor[{_Device.Name}] sending notification via Smtp");
-                                    MailAddress _from = new MailAddress(_Global.Smtp.EmailAddress);
-                                    MailAddress _to = new MailAddress(_Device.NotificationMethod.Address);
-                                    string _subject = $"Device {_Device.Name} state changed.";
-                                    string _plaintextContent= await DeviceStateToXML(_Device,current_DeviceState);
-                                    string _htmlContent = await DeviceStateToHTML(_Device,current_DeviceState);
-                                    try {
-
-                                        MailMessage _smtpMessage = new MailMessage(_from,_to);
-                                        _smtpMessage.BodyEncoding = Encoding.UTF8;
-                                        _smtpMessage.SubjectEncoding = Encoding.UTF8;
-                                        _smtpMessage.Subject = _subject;
-                                        _smtpMessage.Body = _plaintextContent;
-                                        AlternateView _htmlView = AlternateView.CreateAlternateViewFromString(_htmlContent,Encoding.UTF8, MediaTypeNames.Text.Html);
-                                        _htmlView.ContentType = new System.Net.Mime.ContentType(MediaTypeNames.Text.Html);
-                                        _smtpMessage.AlternateViews.Add(_htmlView);
-                                        await _SmtpClient.SendMailAsync(_smtpMessage,stoppingToken);
-                                        Log.Information($"Monitor[{_Device.Name}] sent notification via Smtp");
-                                    }
-                                    catch(Exception _SmtpException)
-                                    {
-                                        Log.Error(_SmtpException, $"Monitor[{_Device.Name}] failed to send notification via Smtp");
-                                    }
-                                }
-                            }
-                            last_DeviceState = current_DeviceState; // save current state
-                            Log.Debug($"Monitor[{_Device.Name}] internal state updated.");
+                            Log.Debug($"Monitor[{_Device.Name}] process notifications.");
+                            ProcessNotifications(_Device, compare_DeviceStateDict);
+                            Log.Debug($"Monitor[{_Device.Name}] processed notifications.");
                         }
+                        Log.Information($"Monitor[{_Device.Name}] polled. total: {poll_totalCount} - no change: {poll_nochangeCount} - change: {poll_changeCount}");
+                        last_DeviceStateDict = current_DeviceStateDict; // save current state
+                        Log.Debug($"Monitor[{_Device.Name}] internal state updated.");
                     }
                 }
                 catch(Exception _Exception)
@@ -173,47 +116,152 @@ namespace devm0n
                 }
                 TimeSpan _jitter = _Device.PollInterval.Next();
                 Log.Debug($"Monitor[{_Device.Name}] sleeping for {_jitter}");
-                await Task.Delay(_jitter, stoppingToken);
+                await Task.Delay(_jitter, _stoppingToken);
             }
-            Log.Information($"Monitor[{_Device.Name}] poll statistics. total: {poll_totalCount} - no change: {poll_nochangeCount} - change: {poll_changeCount}");
         }
 
-        private async Task<string> DeviceStateToXML(DeviceConfiguration _Device, DeviceState _this)
+        private async Task ProcessNotifications(DeviceConfiguration _Device, Dictionary<string,string> _Changes)
         {
-            string _result = string.Empty;
-            using (MemoryStream _MemoryBuffer = new MemoryStream())
+            foreach(DeviceFieldConfiguration _Field in _Device.Fields)
             {
-                using (StreamWriter _writer = new StreamWriter(_MemoryBuffer))
+                if (_Field.Enabled)
                 {
-                    _XmlSerializer.Serialize(_writer, _this);
-                    _MemoryBuffer.Position=0;
-                    using (StreamReader _reader = new StreamReader(_MemoryBuffer))
+                    if (_Changes.ContainsKey(_Field.Name))
                     {
-                        _result = _reader.ReadToEnd();
-                        _reader.Close();
+                        if (_Groups.ContainsKey(_Field.Group))
+                        {
+                            GroupConfiguration _Group = _Groups[_Field.Group];
+                            if (_Group.Enabled)
+                            {
+                                foreach(NotificationMethodConfiguration _Method in _Group.NotificationMethods)
+                                {
+                                    if (_Method.Enabled)
+                                    {
+                                        if (_Method.Type == NotificationType.SENDGRID) {
+                                                Log.Debug($"Monitor[{_Device.Name}] sending notification via SendGrid to {_Method.Address}");
+                                                EmailAddress _from = new EmailAddress(_Global.SendGrid.EmailAddress);
+                                                EmailAddress _to = new EmailAddress(_Method.Address);
+                                                string _subject = $"Device {_Device.Name} state changed.";
+                                                string _plaintextContent= await DeviceStateToText(_Device,_Changes);
+                                                string _htmlContent = await DeviceStateToHTML(_Device,_Changes);
+                                                try {
+                                                    SendGridMessage _sgMessage = MailHelper.CreateSingleEmail(_from, _to, _subject, _plaintextContent, _htmlContent);
+                                                    Response _sgResponse = await _SendGridClient.SendEmailAsync(_sgMessage);
+                                                    if (_sgResponse.StatusCode == System.Net.HttpStatusCode.Accepted)
+                                                        Log.Debug($"Monitor[{_Device.Name}] sent notification via SendGrid to {_Method.Address}");
+                                                    else
+                                                        throw new HttpRequestException($"{_sgResponse.StatusCode}");
+                                                }
+                                                catch(Exception _SendGridException)
+                                                {
+                                                    Log.Error(_SendGridException, $"Monitor[{_Device.Name}] failed to send notification via SendGrid to {_Method.Address}");
+                                                }
+                                        }
+                                        else if (_Method.Type == NotificationType.TWILIO) {
+                                                Log.Debug($"Monitor[{_Device.Name}] sending notification via Twilio to {_Method.Address}");
+                                                PhoneNumber _from = new PhoneNumber(_Global.Twilio.PhoneNumber);
+                                                PhoneNumber _to = new PhoneNumber(_Method.Address);
+                                                string _smsContent = "State Changed\r\n";
+                                                _smsContent = _smsContent + await DeviceStateToText(_Device,_Changes);
+                                                try {
+                                                    MessageResource _twMessage = await MessageResource.CreateAsync(to: _to, from: _from, body: _smsContent, client: _TwilioClient);
+                                                    if (_twMessage.Status == MessageResource.StatusEnum.Queued)
+                                                        Log.Information($"Monitor[{_Device.Name}] sent notification via Twilio to {_Method.Address}");
+                                                    else
+                                                        throw new HttpRequestException($"{_twMessage.Status}");
+                                                }
+                                                catch(Exception _TwilioException)
+                                                {
+                                                    Log.Error(_TwilioException, $"Monitor[{_Device.Name}] failed to send notification via Twilio to {_Method.Address}");
+                                                }
+                                        }
+                                        else if (_Method.Type == NotificationType.SMTP) {
+                                            Log.Debug($"Monitor[{_Device.Name}] sending notification via Smtp");
+                                            MailAddress _from = new MailAddress(_Global.Smtp.EmailAddress);
+                                            MailAddress _to = new MailAddress(_Method.Address);
+                                            string _subject = $"Device {_Device.Name} state changed.";
+                                            string _plaintextContent= await DeviceStateToText(_Device,_Changes);
+                                            string _htmlContent = await DeviceStateToHTML(_Device,_Changes);
+                                            try {
+
+                                                MailMessage _smtpMessage = new MailMessage(_from,_to);
+                                                _smtpMessage.BodyEncoding = Encoding.UTF8;
+                                                _smtpMessage.SubjectEncoding = Encoding.UTF8;
+                                                _smtpMessage.Subject = _subject;
+                                                _smtpMessage.Body = _plaintextContent;
+                                                AlternateView _htmlView = AlternateView.CreateAlternateViewFromString(_htmlContent,Encoding.UTF8, MediaTypeNames.Text.Html);
+                                                _htmlView.ContentType = new System.Net.Mime.ContentType(MediaTypeNames.Text.Html);
+                                                _smtpMessage.AlternateViews.Add(_htmlView);
+                                                await _SmtpClient.SendMailAsync(_smtpMessage,_stoppingToken);
+                                                Log.Information($"Monitor[{_Device.Name}] sent notification via Smtp");
+                                            }
+                                            catch(Exception _SmtpException)
+                                            {
+                                                Log.Error(_SmtpException, $"Monitor[{_Device.Name}] failed to send notification via Smtp");
+                                            }
+                                        }
+                                        else
+                                        {
+                                            Log.Warning($"Monitor[{_Device.Name}] detected unknown notification of type {_Method.Type} to {_Method.Address}.");
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
-            }
-            return _result;
+            }           
         }
+        private async Task<Dictionary<string,string>> DictionaryDiff(Dictionary<string,string> _dict1, Dictionary<string,string> _dict2)
+        {
+            Dictionary<string,string> _result = new  Dictionary<string, string>();
 
-        private async Task<string> DeviceStateToSMS(DeviceConfiguration _Device, DeviceState _this)
+            foreach(KeyValuePair<string,string> _item in _dict1)
+                if (_dict2.ContainsKey(_item.Key))
+                    if (_dict2[_item.Key] != _item.Value)
+                        _result.Add(_item.Key,_item.Value);
+
+            foreach(KeyValuePair<string,string> _item in _dict2)
+                if (_dict1.ContainsKey(_item.Key))
+                    if (_dict1[_item.Key] != _item.Value)
+                        if (!_result.ContainsKey(_item.Key))
+                            _result.Add(_item.Key,_item.Value);
+    
+            return _result; 
+        }
+        private async Task<Dictionary<string,string>> XmlToDictionary(string _XmlDocumentData)
+        {
+            Dictionary<string, string> _XmlDictionary = new Dictionary<string, string>();
+            try {
+                XmlDocument _XmlDocument = new XmlDocument();
+                _XmlDocument.LoadXml(_XmlDocumentData);
+                foreach (XmlNode _XmlNode in _XmlDocument.SelectNodes("/datavalues/*"))
+                {
+                    _XmlDictionary[_XmlNode.Name] = _XmlNode.InnerText;
+                } 
+                return _XmlDictionary;
+            }
+            catch
+            {
+                return null;
+            }
+        }
+        private async Task<string> DeviceStateToText(DeviceConfiguration _Device, Dictionary<string,string> _Changes)
         {
             StringBuilder _builder = new StringBuilder();
-            _builder.AppendLine($"{_Device.Name}\r");
             _builder.AppendLine(new String('-',_Device.Name.Length)+"\r");
-            _builder.AppendLine($"Input State 0: {_this.InputState0}\r");
-            _builder.AppendLine($"Input State 1: {_this.InputState1}\r");
-            _builder.AppendLine($"Input State 2: {_this.InputState2}\r");
-            _builder.AppendLine($"Input State 3: {_this.InputState3}\r");
-            _builder.AppendLine($"Input State 4: {_this.InputState4}\r");
-            _builder.AppendLine($"Input State 5: {_this.InputState5}\r");
-            _builder.AppendLine($"Input State 6: {_this.InputState6}\r");
-            _builder.AppendLine($"Input State 7: {_this.InputState7}\r");
-            _builder.AppendLine($"Power Up Flag: {_this.PowerupFlag}\r");
+            foreach(KeyValuePair<string,string> _Change in _Changes)
+            {
+                _builder.AppendLine($"{_Change.Key}: {_Change.Value}\r");
+            }
             string tmp_result = _builder.ToString();
             _builder.Clear();
-            string hdr_ftr = new String('-',await GetLongestLine(tmp_result));
+            int _lineLength = await GetLongestLine(tmp_result);
+            if (_Device.Name.Length > _lineLength)
+                _lineLength = _Device.Name.Length;
+            string hdr_ftr = new String('-',_lineLength);
+            _builder.AppendLine(hdr_ftr);
+            _builder.AppendLine($"{_Device.Name}");
             _builder.AppendLine(hdr_ftr);
             _builder.Append(tmp_result);
             _builder.AppendLine();
@@ -231,7 +279,7 @@ namespace devm0n
             }
             return _longest_line;
         }
-        private async Task<string> DeviceStateToHTML(DeviceConfiguration _Device, DeviceState _this)
+        private async Task<string> DeviceStateToHTML(DeviceConfiguration _Device, Dictionary<string,string> _Changes)
         {
             StringBuilder _builder = new StringBuilder();
             _builder.Append("<html xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:w=\"urn:schemas-microsoft-com:office:word\" xmlns:m=\"http://schemas.microsoft.com/office/2004/12/omml\" xmlns=\"http://www.w3.org/TR/REC-html40\">\r\n");
@@ -243,44 +291,16 @@ namespace devm0n
             _builder.Append("<o:idmap v:ext=\"edit\" data=\"1\" />\r\n</o:shapelayout></xml><![endif]-->\r\n</head>\r\n<body lang=\"EN-US\" link=\"#0563C1\" vlink=\"#954F72\">\r\n<div class=\"WordSection1\">\r\n<div align=\"center\">\r\n");
             _builder.Append("<table class=\"MsoNormalTable\" border=\"1\" cellpadding=\"0\" style=\"background:#3B5FA6\">\r\n<tbody>\r\n<tr>\r\n<td colspan=\"2\" style=\"background:#7799EE;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
             _builder.Append("<p class=\"MsoNormal\" align=\"center\" style=\"mso-margin-top-alt:auto;mso-margin-bottom-alt:auto;text-align:center\">\r\n");
-            _builder.Append($"<b><span style=\"font-size:24.0pt;font-family:&quot;Verdana&quot;,sans-serif;color:black\">{_Device.Name}<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n</tr>\r\n<tr>\r\n<td style=\"padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append("<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">Input State 0<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n<td style=\"background:gray;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_this.InputState0}<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n</tr>\r\n<tr>\r\n<td style=\"padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append("<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">Input State 1<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n<td style=\"background:gray;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_this.InputState1}<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n</tr>\r\n<tr>\r\n<td style=\"padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append("<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">Input State 2<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n<td style=\"background:gray;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_this.InputState2}<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n</tr>\r\n<tr>\r\n<td style=\"padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append("<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">Input State 3<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n<td style=\"background:gray;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_this.InputState3}<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n</tr>\r\n<tr>\r\n<td style=\"padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append("<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">Input State 4<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n<td style=\"background:gray;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_this.InputState4}<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n</tr>\r\n<tr>\r\n<td style=\"padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append("<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">Input State 5<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n<td style=\"background:gray;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_this.InputState5}<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n</tr>\r\n<tr>\r\n<td style=\"padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append("<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">Input State 6<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n<td style=\"background:gray;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_this.InputState6}<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n</tr>\r\n<tr>\r\n<td style=\"padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append("<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">Input State 7<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n<td style=\"background:gray;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_this.InputState7}<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n</tr>\r\n<tr>\r\n<td style=\"padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append("<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">Power Up Flag<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n<td style=\"background:gray;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-            _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_this.PowerupFlag}<o:p></o:p></span></b></p>\r\n");
-            _builder.Append("</td>\r\n</tr>\r\n</tbody>\r\n</table>\r\n</div>\r\n<p class=\"MsoNormal\"><o:p>&nbsp;</o:p></p>\r\n</div>\r\n</body>\r\n</html>\r\n");
+            _builder.Append($"<b><span style=\"font-size:24.0pt;font-family:&quot;Verdana&quot;,sans-serif;color:black\">{_Device.Name}<o:p></o:p></span></b></p>\r\n</td>\r\n</tr>\r\n");
+            foreach(KeyValuePair<string,string> _Change in _Changes)
+            {
+                _builder.Append("<tr>\r\n<td style=\"padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
+                _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_Change.Key}<o:p></o:p></span></b></p>\r\n");
+                _builder.Append("</td>\r\n<td style=\"background:gray;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
+                _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_Change.Value}<o:p></o:p></span></b></p>\r\n");
+                _builder.Append("</td>\r\n</tr>\r\n");
+            }
+            _builder.Append("</tbody>\r\n</table>\r\n</div>\r\n<p class=\"MsoNormal\"><o:p>&nbsp;</o:p></p>\r\n</div>\r\n</body>\r\n</html>\r\n");
             return _builder.ToString();
         }
     }

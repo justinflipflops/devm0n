@@ -92,19 +92,13 @@ namespace devm0n
                         if (last_DeviceStateDict is null) { last_DeviceStateDict = current_DeviceStateDict; }
                         // intensive and slow processing of books list. We don't want this to delay releasing the connection.
                         Dictionary<string,string> compare_DeviceStateDict = await DictionaryDiff(last_DeviceStateDict,current_DeviceStateDict);
-                        if (compare_DeviceStateDict.Count == 0)
+                        if (compare_DeviceStateDict.Count > 0)
                         {
-                            Log.Debug($"Monitor[{_Device.Name}] state not changed.");
-                            poll_nochangeCount++;
+                            Log.Debug($"Monitor[{_Device.Name}] full state change detected.");
+                            ProcessStateChange(_Device, compare_DeviceStateDict);
                         }
                         else
-                        {
-                            Log.Debug($"Monitor[{_Device.Name}] state changed.");
-                            poll_changeCount++;
-                            Log.Debug($"Monitor[{_Device.Name}] process notifications.");
-                            ProcessNotifications(_Device, compare_DeviceStateDict);
-                            Log.Debug($"Monitor[{_Device.Name}] processed notifications.");
-                        }
+                            poll_nochangeCount++;
                         Log.Information($"Monitor[{_Device.Name}] polled. total: {poll_totalCount} - no change: {poll_nochangeCount} - change: {poll_changeCount}");
                         last_DeviceStateDict = current_DeviceStateDict; // save current state
                         Log.Debug($"Monitor[{_Device.Name}] internal state updated.");
@@ -120,14 +114,17 @@ namespace devm0n
             }
         }
 
-        private async Task ProcessNotifications(DeviceConfiguration _Device, Dictionary<string,string> _Changes)
+        private async Task ProcessStateChange(DeviceConfiguration _Device, Dictionary<string,string> _Changes)
         {
+            bool _changeDetected = false;
+            Log.Debug($"Monitor[{_Device.Name}] processing state change.");
             foreach(DeviceFieldConfiguration _Field in _Device.Fields)
             {
                 if (_Field.Enabled)
                 {
                     if (_Changes.ContainsKey(_Field.Name))
                     {
+                        _changeDetected = true;
                         if (_Groups.ContainsKey(_Field.Group))
                         {
                             GroupConfiguration _Group = _Groups[_Field.Group];
@@ -210,7 +207,12 @@ namespace devm0n
                         }
                     }
                 }
-            }           
+            }
+            if (_changeDetected)
+                poll_changeCount++;
+            else
+                poll_nochangeCount++;
+            Log.Debug($"Monitor[{_Device.Name}] processed state change.");           
         }
         private async Task<Dictionary<string,string>> DictionaryDiff(Dictionary<string,string> _dict1, Dictionary<string,string> _dict2)
         {

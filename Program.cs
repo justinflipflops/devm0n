@@ -171,8 +171,13 @@ namespace devm0n
             {
                 foreach (DeviceConfiguration _device in _Configuration.Devices)
                 {
-                    services.AddSingleton<IHostedService>(sp => new DeviceMonitor(_license, _Configuration.Global, _device, _Configuration.Groups));
-                    Log.Debug($"Added device monitor for {_device.Name}.");
+                    if (_device.Enabled)
+                    {
+                        services.AddSingleton<IHostedService>(sp => new DeviceMonitor(_license, _Configuration.Global, _device, _Configuration.Groups));
+                        Log.Debug($"Added device monitor for {_device.Name}.");
+                    }
+                    else
+                        Log.Debug($"Skipped device monitor for {_device.Name}, disabled.");
                 }
             });
             Log.Debug($"Device monitors added.");

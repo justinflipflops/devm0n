@@ -197,6 +197,7 @@ namespace devm0n
     }
     public class DeviceConfiguration
     {
+        public bool Enabled {get; set;}
         public string Name {get; set;}
         public string Address { get; set; }
         public string File {get; set; }
@@ -206,6 +207,7 @@ namespace devm0n
         public DeviceFieldConfiguration[] Fields { get; set; }
         public DeviceConfiguration() 
         {
+            Enabled = false;
             Name = string.Empty;
             Address = string.Empty;
             File = string.Empty;

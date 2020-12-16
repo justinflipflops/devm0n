@@ -4,6 +4,7 @@ using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Collections.Generic;
+using Newtonsoft.Json.Converters;
 
 namespace devm0n
 {
@@ -297,6 +298,7 @@ namespace devm0n
 
     public class NotificationMethodConfiguration
     {
+        [JsonConverter(typeof(StringEnumConverter))]
         public NotificationType Type { get; set; }
         public string Address { get; set; }
         public bool Enabled { get; set; }

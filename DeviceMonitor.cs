@@ -20,11 +20,13 @@ using System.Net.Mail;
 using System.Net;
 using System.Net.Mime;
 using System.Xml;
+using LicenseOTC;
 
 namespace devm0n
 {
     public class DeviceMonitor : BackgroundService
     {
+        private readonly License _License;
         private readonly GlobalConfiguration _Global;
         private readonly DeviceConfiguration _Device;
         private readonly Dictionary<string,GroupConfiguration> _Groups;
@@ -39,10 +41,11 @@ namespace devm0n
         private UInt64 poll_changeCount = 0;
         private UInt64 poll_nochangeCount = 0;
         private CancellationToken _stoppingToken;
-        public DeviceMonitor(GlobalConfiguration Global, DeviceConfiguration Device, Dictionary<string,GroupConfiguration> Groups)
+        public DeviceMonitor(License License, GlobalConfiguration Global, DeviceConfiguration Device, Dictionary<string,GroupConfiguration> Groups)
         {
-            if (Global == null || Device == null)
+            if (Global == null || Device == null || Groups == null || License == null)
                 throw new ArgumentNullException("DeviceMonitor Constructor");
+            _License = License;
             _Global = Global;
             _Device = Device;
             _Groups = Groups;
@@ -90,12 +93,11 @@ namespace devm0n
                     if (current_DeviceStateDict.Count > 0)
                     {
                         if (last_DeviceStateDict is null) { last_DeviceStateDict = current_DeviceStateDict; }
-                        // intensive and slow processing of books list. We don't want this to delay releasing the connection.
                         Dictionary<string,string> compare_DeviceStateDict = await DictionaryDiff(last_DeviceStateDict,current_DeviceStateDict);
                         if (compare_DeviceStateDict.Count > 0)
                         {
                             Log.Debug($"Monitor[{_Device.Name}] full state change detected.");
-                            ProcessStateChange(_Device, compare_DeviceStateDict);
+                            await ProcessStateChange(_Device, compare_DeviceStateDict);
                         }
                         else
                             poll_nochangeCount++;
@@ -134,7 +136,7 @@ namespace devm0n
                                 {
                                     if (_Method.Enabled)
                                     {
-                                        if (_Method.Type == NotificationType.SENDGRID) {
+                                        if ((_Method.Type == NotificationType.SENDGRID) && (_License.Type >= LicenseType.ENTERPRISE)) {
                                                 Log.Debug($"Monitor[{_Device.Name}] sending notification via SendGrid to {_Method.Address}");
                                                 EmailAddress _from = new EmailAddress(_Global.SendGrid.EmailAddress);
                                                 EmailAddress _to = new EmailAddress(_Method.Address);
@@ -154,7 +156,7 @@ namespace devm0n
                                                     Log.Error(_SendGridException, $"Monitor[{_Device.Name}] failed to send notification via SendGrid to {_Method.Address}");
                                                 }
                                         }
-                                        else if (_Method.Type == NotificationType.TWILIO) {
+                                        else if ((_Method.Type == NotificationType.TWILIO)  && (_License.Type >= LicenseType.PROFESSIONAL)) {
                                                 Log.Debug($"Monitor[{_Device.Name}] sending notification via Twilio to {_Method.Address}");
                                                 PhoneNumber _from = new PhoneNumber(_Global.Twilio.PhoneNumber);
                                                 PhoneNumber _to = new PhoneNumber(_Method.Address);
@@ -172,7 +174,7 @@ namespace devm0n
                                                     Log.Error(_TwilioException, $"Monitor[{_Device.Name}] failed to send notification via Twilio to {_Method.Address}");
                                                 }
                                         }
-                                        else if (_Method.Type == NotificationType.SMTP) {
+                                        else if ((_Method.Type == NotificationType.SMTP) && (_License.Type >= LicenseType.STANDARD)) {
                                             Log.Debug($"Monitor[{_Device.Name}] sending notification via Smtp");
                                             MailAddress _from = new MailAddress(_Global.Smtp.EmailAddress);
                                             MailAddress _to = new MailAddress(_Method.Address);
@@ -214,7 +216,7 @@ namespace devm0n
                 poll_nochangeCount++;
             Log.Debug($"Monitor[{_Device.Name}] processed state change.");           
         }
-        private async Task<Dictionary<string,string>> DictionaryDiff(Dictionary<string,string> _dict1, Dictionary<string,string> _dict2)
+        private Task<Dictionary<string,string>> DictionaryDiff(Dictionary<string,string> _dict1, Dictionary<string,string> _dict2)
         {
             Dictionary<string,string> _result = new  Dictionary<string, string>();
 
@@ -229,9 +231,9 @@ namespace devm0n
                         if (!_result.ContainsKey(_item.Key))
                             _result.Add(_item.Key,_item.Value);
     
-            return _result; 
+            return Task.FromResult(_result); 
         }
-        private async Task<Dictionary<string,string>> XmlToDictionary(string _XmlDocumentData)
+        private Task<Dictionary<string,string>> XmlToDictionary(string _XmlDocumentData)
         {
             Dictionary<string, string> _XmlDictionary = new Dictionary<string, string>();
             try {
@@ -241,7 +243,7 @@ namespace devm0n
                 {
                     _XmlDictionary[_XmlNode.Name] = _XmlNode.InnerText;
                 } 
-                return _XmlDictionary;
+                return Task.FromResult(_XmlDictionary);
             }
             catch
             {
@@ -270,7 +272,7 @@ namespace devm0n
             _builder.Append(hdr_ftr);
             return _builder.ToString();
         }
-        private async Task<int> GetLongestLine(string _multiline)
+        private Task<int> GetLongestLine(string _multiline)
         {
             int _longest_line=0;
             foreach(string _line in _multiline.Split("\r\n"))
@@ -279,9 +281,9 @@ namespace devm0n
                 if (_cur_length>_longest_line)
                     _longest_line=_cur_length;
             }
-            return _longest_line;
+            return Task.FromResult(_longest_line);
         }
-        private async Task<string> DeviceStateToHTML(DeviceConfiguration _Device, Dictionary<string,string> _Changes)
+        private Task<string> DeviceStateToHTML(DeviceConfiguration _Device, Dictionary<string,string> _Changes)
         {
             StringBuilder _builder = new StringBuilder();
             _builder.Append("<html xmlns:v=\"urn:schemas-microsoft-com:vml\" xmlns:o=\"urn:schemas-microsoft-com:office:office\" xmlns:w=\"urn:schemas-microsoft-com:office:word\" xmlns:m=\"http://schemas.microsoft.com/office/2004/12/omml\" xmlns=\"http://www.w3.org/TR/REC-html40\">\r\n");
@@ -303,7 +305,7 @@ namespace devm0n
                 _builder.Append("</td>\r\n</tr>\r\n");
             }
             _builder.Append("</tbody>\r\n</table>\r\n</div>\r\n<p class=\"MsoNormal\"><o:p>&nbsp;</o:p></p>\r\n</div>\r\n</body>\r\n</html>\r\n");
-            return _builder.ToString();
+            return Task.FromResult(_builder.ToString());
         }
     }
 }

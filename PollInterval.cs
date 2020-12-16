@@ -36,8 +36,6 @@ namespace devm0n
         private static Random _random = new Random();
         private TimeSpan GetRandomTimeSpan(TimeSpan LowerBound, TimeSpan UpperBound)
         {
-            if (LowerBound == null || UpperBound == null)
-                throw new ArgumentNullException();
             if (LowerBound > UpperBound)
                 throw new ArgumentOutOfRangeException();
             double _lower = LowerBound.TotalMilliseconds;

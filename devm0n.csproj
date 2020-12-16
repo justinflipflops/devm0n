@@ -14,6 +14,9 @@
     <PackageReference Include="Serilog.Sinks.Console" Version="3.1.1" />
     <PackageReference Include="Serilog.Sinks.File" Version="4.1.0" />
     <PackageReference Include="System.CommandLine.DragonFruit" Version="0.3.0-alpha.20574.7" />
+    <PackageReference Include="Microsoft.Extensions.FileProviders.Embedded" Version="5.0.1" />
     <PackageReference Include="Twilio" Version="5.52.0" />
+    <ProjectReference Include="../LicenseOTC/License/License.csproj" />
+    <EmbeddedResource Include="license.pub" />
   </ItemGroup>
 </Project>

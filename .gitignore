@@ -36,3 +36,5 @@ logs/
 
 #config files
 *.config
+*.lic
+*.snk

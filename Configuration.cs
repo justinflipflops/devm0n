@@ -97,17 +97,21 @@ namespace devm0n
                     File = "stateFull.xml",
                     UseSSL = false,
                     PollInterval = new PollInterval(),
-                    Fields = new DeviceFieldConfiguration[] {
-                        new DeviceFieldConfiguration() {
-                            Name = "input0state",
-                            Enabled = true,
-                            Group = "Group1",
+                    Fields = new Dictionary<string, DeviceFieldConfiguration>() {
+                        { 
+                            "input0state", new DeviceFieldConfiguration() {
+                                DisplayName = "Display Name for State 0",
+                                Enabled = true,
+                                Group = "Group1"
+                            }
                         },
-                        new DeviceFieldConfiguration() {
-                            Name = "input1state",
-                            Enabled = true,
-                            Group = "Group2",
-                        }
+                        { 
+                            "input1state", new DeviceFieldConfiguration() {
+                                DisplayName = "Display Name for State 1",
+                                Enabled = true,
+                                Group = "Group1"
+                            }
+                        },
                     }
                 },
                 new DeviceConfiguration() { 
@@ -117,17 +121,21 @@ namespace devm0n
                     File = "state.xml",
                     UseSSL = true,
                     PollInterval = new PollInterval(),
-                    Fields = new DeviceFieldConfiguration[] {
-                        new DeviceFieldConfiguration() {
-                            Name = "input0state",
-                            Enabled = false,
-                            Group = "Group1",
+                    Fields = new Dictionary<string, DeviceFieldConfiguration>() {
+                        { 
+                            "input0state", new DeviceFieldConfiguration() {
+                                DisplayName = "Display Name for State 0",
+                                Enabled = true,
+                                Group = "Group1"
+                            }
                         },
-                        new DeviceFieldConfiguration() {
-                            Name = "input1state",
-                            Enabled = true,
-                            Group = "Group2",
-                        }
+                        { 
+                            "input1state", new DeviceFieldConfiguration() {
+                                DisplayName = "Display Name for State 1",
+                                Enabled = true,
+                                Group = "Group1"
+                            }
+                        },
                     }
                 }
             };
@@ -204,7 +212,7 @@ namespace devm0n
         public int Port {get; set;}
         public bool UseSSL {get;set;}
         public PollInterval PollInterval { get; set; }
-        public DeviceFieldConfiguration[] Fields { get; set; }
+        public Dictionary<string,DeviceFieldConfiguration> Fields { get; set; }
         public DeviceConfiguration() 
         {
             Enabled = false;
@@ -212,7 +220,7 @@ namespace devm0n
             Address = string.Empty;
             File = string.Empty;
             PollInterval = new PollInterval();
-            Fields = new DeviceFieldConfiguration[0];
+            Fields = new Dictionary<string,DeviceFieldConfiguration>();
         }
         public string GetRequestUrl()
         {
@@ -277,16 +285,15 @@ namespace devm0n
 
     public class DeviceFieldConfiguration
     {
-        public string Name {get; set;}
+        public string DisplayName {get; set;}
         public bool Enabled {get; set;}
         public string Group {get; set;}
         public DeviceFieldConfiguration()
         {
-            Name = string.Empty;
+            DisplayName = string.Empty;
             Group = string.Empty;
         }
     }
-
     public class GroupConfiguration
     {
         public bool Enabled {get; set;}

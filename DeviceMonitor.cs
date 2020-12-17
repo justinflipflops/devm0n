@@ -120,90 +120,107 @@ namespace devm0n
         {
             bool _changeDetected = false;
             Log.Debug($"Monitor[{_Device.Name}] processing state change.");
-            foreach(DeviceFieldConfiguration _Field in _Device.Fields)
+            Dictionary<string,Dictionary<string,string>> notify_Groups = new Dictionary<string, Dictionary<string, string>>();
+            foreach(KeyValuePair<string,string> _Change in _Changes)
             {
-                if (_Field.Enabled)
+                if (_Device.Fields.ContainsKey(_Change.Key))
                 {
-                    if (_Changes.ContainsKey(_Field.Name))
+                    //field listed see if monitered
+                    if (_Device.Fields[_Change.Key].Enabled)
                     {
+                        //we have a changed monitored field - this is a FLAGGABLE CHANGE
                         _changeDetected = true;
-                        if (_Groups.ContainsKey(_Field.Group))
+                        //get the group.
+                        if (_Groups.ContainsKey(_Device.Fields[_Change.Key].Group))
                         {
-                            GroupConfiguration _Group = _Groups[_Field.Group];
-                            if (_Group.Enabled)
+                            if (_Groups[_Device.Fields[_Change.Key].Group].Enabled)
                             {
-                                foreach(NotificationMethodConfiguration _Method in _Group.NotificationMethods)
-                                {
-                                    if (_Method.Enabled)
-                                    {
-                                        if ((_Method.Type == NotificationType.SENDGRID) && (_License.Type >= LicenseType.ENTERPRISE)) {
-                                                Log.Debug($"Monitor[{_Device.Name}] sending notification via SendGrid to {_Method.Address}");
-                                                EmailAddress _from = new EmailAddress(_Global.SendGrid.EmailAddress);
-                                                EmailAddress _to = new EmailAddress(_Method.Address);
-                                                string _subject = $"Device {_Device.Name} state changed.";
-                                                string _plaintextContent= await DeviceStateToText(_Device,_Changes);
-                                                string _htmlContent = await DeviceStateToHTML(_Device,_Changes);
-                                                try {
-                                                    SendGridMessage _sgMessage = MailHelper.CreateSingleEmail(_from, _to, _subject, _plaintextContent, _htmlContent);
-                                                    Response _sgResponse = await _SendGridClient.SendEmailAsync(_sgMessage);
-                                                    if (_sgResponse.StatusCode == System.Net.HttpStatusCode.Accepted)
-                                                        Log.Debug($"Monitor[{_Device.Name}] sent notification via SendGrid to {_Method.Address}");
-                                                    else
-                                                        throw new HttpRequestException($"{_sgResponse.StatusCode}");
-                                                }
-                                                catch(Exception _SendGridException)
-                                                {
-                                                    Log.Error(_SendGridException, $"Monitor[{_Device.Name}] failed to send notification via SendGrid to {_Method.Address}");
-                                                }
+                                //we have a monitored field with a notification group
+                                if (!notify_Groups.ContainsKey(_Device.Fields[_Change.Key].Group))
+                                    notify_Groups[_Device.Fields[_Change.Key].Group] = new Dictionary<string, string>();
+                                notify_Groups[_Device.Fields[_Change.Key].Group][_Change.Key] = _Change.Value;
+                            }
+                        }
+                    }
+                }
+            } 
+            if (notify_Groups.Count > 0)
+            {
+                foreach(KeyValuePair<string,Dictionary<string,string>> notify_group in notify_Groups)
+                {
+                    GroupConfiguration _Group = _Groups[notify_group.Key];
+                    if (_Group.Enabled)
+                    {
+                        foreach(NotificationMethodConfiguration _Method in _Group.NotificationMethods)
+                        {
+                            if (_Method.Enabled)
+                            {
+                                if ((_Method.Type == NotificationType.SENDGRID) && (_License.Type >= LicenseType.ENTERPRISE)) {
+                                        Log.Debug($"Monitor[{_Device.Name}] sending notification via SendGrid to {_Method.Address}");
+                                        EmailAddress _from = new EmailAddress(_Global.SendGrid.EmailAddress);
+                                        EmailAddress _to = new EmailAddress(_Method.Address);
+                                        string _subject = $"Device {_Device.Name} state changed.";
+                                        string _plaintextContent= await DeviceStateToText(_Device,notify_group.Value);
+                                        string _htmlContent = await DeviceStateToHTML(_Device,notify_group.Value);
+                                        try {
+                                            SendGridMessage _sgMessage = MailHelper.CreateSingleEmail(_from, _to, _subject, _plaintextContent, _htmlContent);
+                                            Response _sgResponse = await _SendGridClient.SendEmailAsync(_sgMessage);
+                                            if (_sgResponse.StatusCode == System.Net.HttpStatusCode.Accepted)
+                                                Log.Debug($"Monitor[{_Device.Name}] sent notification via SendGrid to {_Method.Address}");
+                                            else
+                                                throw new HttpRequestException($"{_sgResponse.StatusCode}");
                                         }
-                                        else if ((_Method.Type == NotificationType.TWILIO)  && (_License.Type >= LicenseType.PROFESSIONAL)) {
-                                                Log.Debug($"Monitor[{_Device.Name}] sending notification via Twilio to {_Method.Address}");
-                                                PhoneNumber _from = new PhoneNumber(_Global.Twilio.PhoneNumber);
-                                                PhoneNumber _to = new PhoneNumber(_Method.Address);
-                                                string _smsContent = "State Changed\r\n";
-                                                _smsContent = _smsContent + await DeviceStateToText(_Device,_Changes);
-                                                try {
-                                                    MessageResource _twMessage = await MessageResource.CreateAsync(to: _to, from: _from, body: _smsContent, client: _TwilioClient);
-                                                    if (_twMessage.Status == MessageResource.StatusEnum.Queued)
-                                                        Log.Information($"Monitor[{_Device.Name}] sent notification via Twilio to {_Method.Address}");
-                                                    else
-                                                        throw new HttpRequestException($"{_twMessage.Status}");
-                                                }
-                                                catch(Exception _TwilioException)
-                                                {
-                                                    Log.Error(_TwilioException, $"Monitor[{_Device.Name}] failed to send notification via Twilio to {_Method.Address}");
-                                                }
-                                        }
-                                        else if ((_Method.Type == NotificationType.SMTP) && (_License.Type >= LicenseType.STANDARD)) {
-                                            Log.Debug($"Monitor[{_Device.Name}] sending notification via Smtp");
-                                            MailAddress _from = new MailAddress(_Global.Smtp.EmailAddress);
-                                            MailAddress _to = new MailAddress(_Method.Address);
-                                            string _subject = $"Device {_Device.Name} state changed.";
-                                            string _plaintextContent= await DeviceStateToText(_Device,_Changes);
-                                            string _htmlContent = await DeviceStateToHTML(_Device,_Changes);
-                                            try {
-
-                                                MailMessage _smtpMessage = new MailMessage(_from,_to);
-                                                _smtpMessage.BodyEncoding = Encoding.UTF8;
-                                                _smtpMessage.SubjectEncoding = Encoding.UTF8;
-                                                _smtpMessage.Subject = _subject;
-                                                _smtpMessage.Body = _plaintextContent;
-                                                AlternateView _htmlView = AlternateView.CreateAlternateViewFromString(_htmlContent,Encoding.UTF8, MediaTypeNames.Text.Html);
-                                                _htmlView.ContentType = new System.Net.Mime.ContentType(MediaTypeNames.Text.Html);
-                                                _smtpMessage.AlternateViews.Add(_htmlView);
-                                                await _SmtpClient.SendMailAsync(_smtpMessage,_stoppingToken);
-                                                Log.Information($"Monitor[{_Device.Name}] sent notification via Smtp");
-                                            }
-                                            catch(Exception _SmtpException)
-                                            {
-                                                Log.Error(_SmtpException, $"Monitor[{_Device.Name}] failed to send notification via Smtp");
-                                            }
-                                        }
-                                        else
+                                        catch(Exception _SendGridException)
                                         {
-                                            Log.Warning($"Monitor[{_Device.Name}] detected unknown notification of type {_Method.Type} to {_Method.Address}.");
+                                            Log.Error(_SendGridException, $"Monitor[{_Device.Name}] failed to send notification via SendGrid to {_Method.Address}");
                                         }
+                                }
+                                else if ((_Method.Type == NotificationType.TWILIO)  && (_License.Type >= LicenseType.PROFESSIONAL)) {
+                                        Log.Debug($"Monitor[{_Device.Name}] sending notification via Twilio to {_Method.Address}");
+                                        PhoneNumber _from = new PhoneNumber(_Global.Twilio.PhoneNumber);
+                                        PhoneNumber _to = new PhoneNumber(_Method.Address);
+                                        string _smsContent = "State Changed\r\n";
+                                        _smsContent = _smsContent + await DeviceStateToText(_Device,notify_group.Value);
+                                        try {
+                                            MessageResource _twMessage = await MessageResource.CreateAsync(to: _to, from: _from, body: _smsContent, client: _TwilioClient);
+                                            if (_twMessage.Status == MessageResource.StatusEnum.Queued)
+                                                Log.Information($"Monitor[{_Device.Name}] sent notification via Twilio to {_Method.Address}");
+                                            else
+                                                throw new HttpRequestException($"{_twMessage.Status}");
+                                        }
+                                        catch(Exception _TwilioException)
+                                        {
+                                            Log.Error(_TwilioException, $"Monitor[{_Device.Name}] failed to send notification via Twilio to {_Method.Address}");
+                                        }
+                                }
+                                else if ((_Method.Type == NotificationType.SMTP) && (_License.Type >= LicenseType.STANDARD)) {
+                                    Log.Debug($"Monitor[{_Device.Name}] sending notification via Smtp");
+                                    MailAddress _from = new MailAddress(_Global.Smtp.EmailAddress);
+                                    MailAddress _to = new MailAddress(_Method.Address);
+                                    string _subject = $"Device {_Device.Name} state changed.";
+                                    string _plaintextContent= await DeviceStateToText(_Device,notify_group.Value);
+                                    string _htmlContent = await DeviceStateToHTML(_Device,notify_group.Value);
+                                    try {
+
+                                        MailMessage _smtpMessage = new MailMessage(_from,_to);
+                                        _smtpMessage.BodyEncoding = Encoding.UTF8;
+                                        _smtpMessage.SubjectEncoding = Encoding.UTF8;
+                                        _smtpMessage.Subject = _subject;
+                                        _smtpMessage.Body = _plaintextContent;
+                                        AlternateView _htmlView = AlternateView.CreateAlternateViewFromString(_htmlContent,Encoding.UTF8, MediaTypeNames.Text.Html);
+                                        _htmlView.ContentType = new System.Net.Mime.ContentType(MediaTypeNames.Text.Html);
+                                        _smtpMessage.AlternateViews.Add(_htmlView);
+                                        await _SmtpClient.SendMailAsync(_smtpMessage,_stoppingToken);
+                                        Log.Information($"Monitor[{_Device.Name}] sent notification via Smtp");
                                     }
+                                    catch(Exception _SmtpException)
+                                    {
+                                        Log.Error(_SmtpException, $"Monitor[{_Device.Name}] failed to send notification via Smtp");
+                                    }
+                                }
+                                else
+                                {
+                                    Log.Warning($"Monitor[{_Device.Name}] detected unknown notification of type {_Method.Type} to {_Method.Address}.");
                                 }
                             }
                         }
@@ -253,23 +270,12 @@ namespace devm0n
         private async Task<string> DeviceStateToText(DeviceConfiguration _Device, Dictionary<string,string> _Changes)
         {
             StringBuilder _builder = new StringBuilder();
-            _builder.AppendLine(new String('-',_Device.Name.Length)+"\r");
+            _builder.AppendLine($"State Change Detected");
+            _builder.AppendLine($"Device: {_Device.Name}");
             foreach(KeyValuePair<string,string> _Change in _Changes)
             {
-                _builder.AppendLine($"{_Change.Key}: {_Change.Value}\r");
+                _builder.AppendLine($"{_Device.Fields[_Change.Key].DisplayName}: {_Change.Value}\r");
             }
-            string tmp_result = _builder.ToString();
-            _builder.Clear();
-            int _lineLength = await GetLongestLine(tmp_result);
-            if (_Device.Name.Length > _lineLength)
-                _lineLength = _Device.Name.Length;
-            string hdr_ftr = new String('-',_lineLength);
-            _builder.AppendLine(hdr_ftr);
-            _builder.AppendLine($"{_Device.Name}");
-            _builder.AppendLine(hdr_ftr);
-            _builder.Append(tmp_result);
-            _builder.AppendLine();
-            _builder.Append(hdr_ftr);
             return _builder.ToString();
         }
         private Task<int> GetLongestLine(string _multiline)
@@ -299,7 +305,7 @@ namespace devm0n
             foreach(KeyValuePair<string,string> _Change in _Changes)
             {
                 _builder.Append("<tr>\r\n<td style=\"padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
-                _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_Change.Key}<o:p></o:p></span></b></p>\r\n");
+                _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_Device.Fields[_Change.Key].DisplayName}<o:p></o:p></span></b></p>\r\n");
                 _builder.Append("</td>\r\n<td style=\"background:gray;padding:3.0pt 3.0pt 3.0pt 3.0pt\">\r\n");
                 _builder.Append($"<p class=\"MsoNormal\" align=\"center\" style=\"text-align:center\"><b><span style=\"font-size:10.5pt;font-family:&quot;Verdana&quot;,sans-serif;color:white\">{_Change.Value}<o:p></o:p></span></b></p>\r\n");
                 _builder.Append("</td>\r\n</tr>\r\n");
